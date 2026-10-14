@@ -1,5 +1,3 @@
-
-
 """
 AI Resume ATS Checker
 ---------------------
@@ -15,6 +13,7 @@ import io
 import json
 import os
 import re
+import time
 
 import streamlit as st
 from docx import Document
@@ -23,8 +22,10 @@ from pypdf import PdfReader
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-DEFAULT_MODEL = "gemini-3.5-flash"      # change here, or set GEMINI_MODEL in secrets/env
-FALLBACK_MODELS = ["gemini-3.5-flash"]  # tried automatically if the main model fails
+DEFAULT_MODEL = "gemini-3.8-flash"      # change here, or set GEMINI_MODEL in secrets/env
+FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                   "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]  # tried in order if the main model fails
+RETRY_DELAYS = [2, 5]                     # seconds to wait between retries on temporary overload (503/500/504)
 MAX_FILE_MB = 5
 MIN_TEXT_CHARS = 150                    # below this we assume a scanned/empty PDF
 MAX_RESUME_CHARS = 30000                # safety cap on what we send to the model
@@ -229,18 +230,32 @@ def call_gemini(prompt: str, api_key: str, model: str) -> str:
     models_to_try = [model] + [m for m in FALLBACK_MODELS if m != model]
     errors = []
     for m in models_to_try:
-        try:
-            response = client.models.generate_content(model=m, contents=prompt, config=config)
-            text = getattr(response, "text", None)
-            if text:
-                return text
-            errors.append(f"[{m}] empty response (it may have been blocked)")
-        except Exception as e:  # noqa: BLE001 - we want to surface any API error nicely
-            errors.append(f"[{m}] {e}")
-            msg = str(e).lower()
-            # Bad key / quota problems will not be fixed by another model.
-            if any(k in msg for k in ("api key", "api_key", "permission", "unauthenticated", "quota", "429")):
+        fatal = False
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                response = client.models.generate_content(model=m, contents=prompt, config=config)
+                text = getattr(response, "text", None)
+                if text:
+                    return text
+                errors.append(f"[{m}] empty response (it may have been blocked)")
                 break
+            except Exception as e:  # noqa: BLE001 - we want to surface any API error nicely
+                msg = str(e).lower()
+                # Bad key / quota problems will not be fixed by another model.
+                if any(k in msg for k in ("api key", "api_key", "permission", "unauthenticated", "quota", "429")):
+                    errors.append(f"[{m}] {e}")
+                    fatal = True
+                    break
+                # Temporary overload: wait and retry the same model.
+                temporary = any(k in msg for k in ("503", "500", "504", "unavailable", "overloaded",
+                                                   "high demand", "deadline", "timed out"))
+                if temporary and attempt < len(RETRY_DELAYS):
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
+                errors.append(f"[{m}] {e}")
+                break
+        if fatal:
+            break
     raise RuntimeError(" || ".join(errors) if errors else "Unknown error calling Gemini.")
 
 
@@ -257,6 +272,9 @@ def friendly_error(e: Exception) -> str:
         return "Your Gemini API key looks invalid or lacks permission. Please check it."
     if "quota" in low or "429" in low or "resource_exhausted" in low:
         return "Gemini rate limit / quota reached. Wait a minute and try again."
+    if "503" in low or "unavailable" in low or "high demand" in low:
+        return ("Google's Gemini servers are busy right now (temporary). "
+                "The app already retried automatically; please wait a minute and click Analyze again.")
     if "blocked" in low or "safety" in low:
         return "The AI blocked this request. Try a different file."
     return f"Something went wrong: {msg}"
