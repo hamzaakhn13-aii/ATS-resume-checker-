@@ -23,7 +23,7 @@ from pypdf import PdfReader
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-DEFAULT_MODEL = "gemini-3.8-flash"      # change here, or set GEMINI_MODEL in secrets/env
+DEFAULT_MODEL = "gemini-3.7-flash"      # change here, or set GEMINI_MODEL in secrets/env
 FALLBACK_MODELS = ["gemini-3.7-flash"]  # tried automatically if the main model fails
 MAX_FILE_MB = 5
 MIN_TEXT_CHARS = 150                    # below this we assume a scanned/empty PDF
