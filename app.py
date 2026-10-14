@@ -1,3 +1,5 @@
+
+
 """
 AI Resume ATS Checker
 ---------------------
@@ -21,8 +23,8 @@ from pypdf import PdfReader
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-DEFAULT_MODEL = "gemini-3.7-flash"      # change here, or set GEMINI_MODEL in secrets/env
-FALLBACK_MODELS = ["gemini-2.5-flash"]  # tried automatically if the main model fails
+DEFAULT_MODEL = "gemini-3.8-flash"      # change here, or set GEMINI_MODEL in secrets/env
+FALLBACK_MODELS = ["gemini-3.7-flash"]  # tried automatically if the main model fails
 MAX_FILE_MB = 5
 MIN_TEXT_CHARS = 150                    # below this we assume a scanned/empty PDF
 MAX_RESUME_CHARS = 30000                # safety cap on what we send to the model
@@ -225,21 +227,21 @@ def call_gemini(prompt: str, api_key: str, model: str) -> str:
     config = types.GenerateContentConfig(response_mime_type="application/json")
 
     models_to_try = [model] + [m for m in FALLBACK_MODELS if m != model]
-    last_error = None
+    errors = []
     for m in models_to_try:
         try:
             response = client.models.generate_content(model=m, contents=prompt, config=config)
             text = getattr(response, "text", None)
             if text:
                 return text
-            last_error = ValueError("The AI returned an empty response (it may have been blocked).")
+            errors.append(f"[{m}] empty response (it may have been blocked)")
         except Exception as e:  # noqa: BLE001 - we want to surface any API error nicely
-            last_error = e
+            errors.append(f"[{m}] {e}")
             msg = str(e).lower()
             # Bad key / quota problems will not be fixed by another model.
             if any(k in msg for k in ("api key", "api_key", "permission", "unauthenticated", "quota", "429")):
                 break
-    raise last_error if last_error else RuntimeError("Unknown error calling Gemini.")
+    raise RuntimeError(" || ".join(errors) if errors else "Unknown error calling Gemini.")
 
 
 def analyze_resume(resume_text: str, job_description: str, api_key: str, model: str) -> dict:
